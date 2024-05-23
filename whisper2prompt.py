@@ -4,6 +4,12 @@ import traceback
 import requests
 from glob import glob
 from tqdm import tqdm
+from pathlib import Path
+base_path=Path(__file__).parent.absolute()
+base_path = base_path/"models"
+local = False
+if os.path.exists(base_path):
+    local = True
 
 def check_fw_local_models():
     '''
@@ -17,8 +23,13 @@ def check_fw_local_models():
         "large",    "large-v1", 
         "large-v2", "large-v3"]
     for i, size in enumerate(model_size_list):
-        if os.path.exists(f'faster-whisper-{size}'):
-            model_size_list[i] = size + '(local)'
+        if local:
+            if os.path.exists(base_path/f'faster-whisper-{size}'):
+                model_size_list[i] = size + '(local)'
+            else:
+                if os.path.exists(f'faster-whisper-{size}'):
+                    model_size_list[i] = size + '(local)'
+        
     return model_size_list
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
@@ -46,46 +57,69 @@ language_code_list = [
     "vi", "yi", "yo", "zh", "yue",
     "auto"]
 
-def execute_asr(input_file, output_folder, model_size, language,precision):
-    if 'local' in model_size:
-        model_size = model_size.split('(')[0]
-        model_path = f'faster-whisper-{model_size}'
-    else:
-        model_path = model_size
-    if language == 'auto':
-        language = None #不设置语种由模型自动输出概率最高的语种
+def execute_asr(input_files, output_folder, model_size, language,precision):
+    output_file_paths =[]
+    for input_file in input_files:
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+        output_file_name = os.path.basename(input_file)
+        output_file_path = os.path.abspath(f'{output_folder}/{output_file_name}.json')
+        if os.path.exists(output_file_path):
+            output_file_paths.append(output_file_path)
+        if 'local' in model_size:
+            if local:
+                model_size = model_size.split('(')[0]
+                model_path = str(base_path/f'faster-whisper-{model_size}')
+            else:
+                model_size = model_size.split('(')[0]
+                model_path = str(f'faster-whisper-{model_size}')
+        else:
+            if local:
+                model_path = str(base_path/f'faster-whisper-{model_size}')
+            else:
+                model_path = str(f'faster-whisper-{model_size}')
+        if language == 'auto':
+            language = None #不设置语种由模型自动输出概率最高的语种
+    if len(output_file_paths)==len(input_files):
+        return output_file_paths
     print("loading faster whisper model:",model_size,model_path)
+    if not os.path.exists(model_path):
+        os.makedirs(model_path)
     try:  
         from faster_whisper import WhisperModel
-        model = WhisperModel(model_path, device="cuda", compute_type=precision)
+        model = WhisperModel(model_path, device="cuda", compute_type=precision,download_root=model_path)
     except:
         return print(traceback.format_exc())
     output = []
-    output_file_name = os.path.basename(input_file)
-    output_file_path = os.path.abspath(f'{output_folder}/{output_file_name}.json')
 
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
-
-    file = input_file
-    try:
-        segments, info = model.transcribe(
+    for input_file in input_files:
+        print(input_file)
+        output =[]
+        output_file_name = os.path.basename(input_file)
+        output_file_path = os.path.abspath(f'{output_folder}/{output_file_name}.json')
+        if os.path.exists(output_file_path):
+            continue
+        file = input_file
+        try:
+            segments, info = model.transcribe(
             audio          = file,
             beam_size      = 5,
             vad_filter     = True,
             vad_parameters = dict(min_silence_duration_ms=700),
             language       = language)
-        for segment in segments:
-            output.append(dict(name="Name",start=segment.start, end=segment.end,message=segment.text))
-    except:
-        return print(traceback.format_exc())
+            for segment in segments:
+                output.append(dict(name="Name",start=segment.start, end=segment.end,message=segment.text))
+        except:
+            return print(traceback.format_exc())
         
-    import json
-    with open(output_file_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False)
-        print(f"ASR 任务完成->标注文件路径: {output_file_path}\n")
-    return output_file_path
-
+        import json
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False)
+            print(f"ASR 任务完成->标注文件路径: {output_file_path}\n")
+            output_file_paths.append(output_file_path)
+    return output_file_paths
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input_file", type=str, required=True,
